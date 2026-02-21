@@ -3,31 +3,45 @@
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
-        body { margin: 0; background: #222; overflow: hidden; touch-action: none; font-family: sans-serif; }
-        canvas { display: block; background: #333; }
-        #status { position: absolute; top: 10px; left: 10px; color: #0f0; pointer-events: none; }
+        body { margin: 0; background: #111; overflow: hidden; touch-action: none; font-family: 'Courier New', Courier, monospace; }
+        canvas { display: block; background: #222; }
+        #ui { position: absolute; top: 20px; left: 20px; color: #fff; pointer-events: none; font-size: 20px; text-shadow: 2px 2px #000; }
     </style>
 </head>
 <body>
-    <div id="status">System: Online - Touch to Drive</div>
+    <div id="ui">LAP: <span id="lapCount">0</span></div>
     <canvas id="gameCanvas"></canvas>
 
 <script>
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
+const lapDisplay = document.getElementById('lapCount');
 
-// 1. Car Properties
-let car = {
-    x: 200, y: 200,
-    angle: 0,
-    velX: 0, velY: 0,
-    width: 30, height: 15,
-    power: 0.15,
-    grip: 0.92 // Lower = more drift
-};
-
-// 2. Input Handling
+// 1. Car & Game State
+let car = { x: 300, y: 150, angle: 0, velX: 0, velY: 0, width: 30, height: 15, power: 0.18, grip: 0.93 };
 let joystick = { active: false, x: 0, y: 0, currX: 0, currY: 0 };
+let laps = 0;
+let canScoreLap = false;
+
+// 2. Track Design (A large loop)
+// Outer Boundaries
+const walls = [
+    // Outer Border
+    {x: 100, y: 50, w: 1800, h: 40},    // Top
+    {x: 100, y: 1000, w: 1800, h: 40}, // Bottom
+    {x: 50, y: 50, w: 50, h: 1000},    // Left
+    {x: 1900, y: 50, w: 50, h: 1000},  // Right
+    
+    // Inner Island (Creating the "Track" lane)
+    {x: 350, y: 250, w: 1300, h: 550}, 
+    
+    // Chicanes / Obstacles
+    {x: 800, y: 50, w: 40, h: 200},    // Top chicane
+    {x: 1200, y: 800, w: 40, h: 200}   // Bottom chicane
+];
+
+// 3. Finish Line (Checkpoint)
+const finishLine = { x: 300, y: 50, w: 10, h: 200 };
 
 function resize() {
     canvas.width = window.innerWidth;
@@ -36,7 +50,7 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
-// Touch Events
+// Input Events
 canvas.addEventListener('touchstart', e => {
     joystick.active = true;
     joystick.x = e.touches[0].clientX;
@@ -44,17 +58,25 @@ canvas.addEventListener('touchstart', e => {
     joystick.currX = joystick.x;
     joystick.currY = joystick.y;
 });
-
 canvas.addEventListener('touchmove', e => {
     if(joystick.active) {
         joystick.currX = e.touches[0].clientX;
         joystick.currY = e.touches[0].clientY;
     }
 });
-
 canvas.addEventListener('touchend', () => joystick.active = false);
 
-// 3. Game Loop
+// 4. Collision & Lap Logic
+function checkCollision(nextX, nextY) {
+    for (let wall of walls) {
+        if (nextX + 10 > wall.x && nextX - 10 < wall.x + wall.w &&
+            nextY + 10 > wall.y && nextY - 10 < wall.y + wall.h) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function update() {
     if (joystick.active) {
         const dx = joystick.currX - joystick.x;
@@ -63,43 +85,45 @@ function update() {
         
         if (dist > 5) {
             const targetAngle = Math.atan2(dy, dx);
-            // Smooth rotation
             let diff = targetAngle - car.angle;
             while (diff < -Math.PI) diff += Math.PI * 2;
             while (diff > Math.PI) diff -= Math.PI * 2;
-            car.angle += diff * 0.1;
+            car.angle += diff * 0.12;
 
-            // Apply Thrust
             const force = Math.min(dist / 50, 1) * car.power;
             car.velX += Math.cos(car.angle) * force;
             car.velY += Math.sin(car.angle) * force;
         }
     }
 
-    // 4. Drift Logic (The "Secret Sauce")
-    // Find forward vs sideways velocity
+    // Drift Logic
     const sn = Math.sin(car.angle);
     const cs = Math.cos(car.angle);
-    
-    // Project velocity onto the "side" of the car
     let lateralVelX = -sn * (car.velX * -sn + car.velY * cs);
     let lateralVelY = cs * (car.velX * -sn + car.velY * cs);
-
-    // Kill lateral velocity based on grip
     car.velX -= lateralVelX * (1 - car.grip);
     car.velY -= lateralVelY * (1 - car.grip);
 
-    // Friction & Position
     car.velX *= 0.98;
     car.velY *= 0.98;
-    car.x += car.velX;
-    car.y += car.velY;
 
-    // Screen wrap
-    if(car.x > canvas.width) car.x = 0;
-    if(car.x < 0) car.x = canvas.width;
-    if(car.y > canvas.height) car.y = 0;
-    if(car.y < 0) car.y = canvas.height;
+    // Movement + Collision
+    if (!checkCollision(car.x + car.velX, car.y)) car.x += car.velX;
+    else car.velX *= -0.4;
+
+    if (!checkCollision(car.x, car.y + car.velY)) car.y += car.velY;
+    else car.velY *= -0.4;
+
+    // Lap Counting
+    // If car passes x=1000 (midpoint), allow scoring
+    if (car.x > 1000) canScoreLap = true;
+    
+    // Check Finish Line (at the start of the top straight)
+    if (canScoreLap && car.x < 350 && car.y < 250) {
+        laps++;
+        lapDisplay.innerText = laps;
+        canScoreLap = false;
+    }
 
     draw();
     requestAnimationFrame(update);
@@ -108,7 +132,38 @@ function update() {
 function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw Joystick
+    ctx.save();
+    ctx.translate(canvas.width/2 - car.x, canvas.height/2 - car.y);
+
+    // Draw Asphalt
+    ctx.fillStyle = "#333";
+    ctx.fillRect(0, 0, 2000, 1100);
+
+    // Draw Finish Line
+    ctx.fillStyle = "#fff";
+    for(let i=0; i<8; i++) {
+        ctx.fillRect(310, 50 + (i*25), 20, 12);
+    }
+
+    // Draw Walls (The Track)
+    ctx.fillStyle = "#555";
+    for (let wall of walls) {
+        ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
+    }
+
+    // Draw Car
+    ctx.save();
+    ctx.translate(car.x, car.y);
+    ctx.rotate(car.angle);
+    ctx.fillStyle = "#ff4444";
+    ctx.fillRect(-car.width/2, -car.height/2, car.width, car.height);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(5, -car.height/2 + 2, 5, car.height - 4);
+    ctx.restore();
+
+    ctx.restore();
+
+    // Joystick
     if(joystick.active) {
         ctx.beginPath();
         ctx.arc(joystick.x, joystick.y, 40, 0, Math.PI*2);
@@ -119,18 +174,6 @@ function draw() {
         ctx.fillStyle = "rgba(255,255,255,0.5)";
         ctx.fill();
     }
-
-    // Draw Car
-    ctx.save();
-    ctx.translate(car.x, car.y);
-    ctx.rotate(car.angle);
-    // Body
-    ctx.fillStyle = "#ff4444";
-    ctx.fillRect(-car.width/2, -car.height/2, car.width, car.height);
-    // Windows/Direction indicator
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(5, -car.height/2 + 2, 5, car.height - 4);
-    ctx.restore();
 }
 
 update();
