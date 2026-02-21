@@ -2,102 +2,138 @@
 <html>
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"></script>
-    <style> 
-        body { margin: 0; background: #222; overflow: hidden; touch-action: none; } 
+    <style>
+        body { margin: 0; background: #222; overflow: hidden; touch-action: none; font-family: sans-serif; }
+        canvas { display: block; background: #333; }
+        #status { position: absolute; top: 10px; left: 10px; color: #0f0; pointer-events: none; }
     </style>
 </head>
 <body>
+    <div id="status">System: Online - Touch to Drive</div>
+    <canvas id="gameCanvas"></canvas>
+
 <script>
-class MainScene extends Phaser.Scene {
-    constructor() { super('MainScene'); }
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
 
-    create() {
-        // 1. World Setup
-        this.matter.world.setBounds(0, 0, 2000, 2000);
-        
-        // 2. The Car
-        this.car = this.add.rectangle(400, 300, 40, 20, 0xff4444);
-        this.matter.add.gameObject(this.car);
-        this.car.setFrictionAir(0.05);
-        this.car.setMass(15);
-
-        // 3. Simple Touch UI (The "Stick")
-        this.joyBase = this.add.circle(0, 0, 50, 0xffffff, 0.2).setVisible(false).setScrollFactor(0);
-        this.joyThumb = this.add.circle(0, 0, 25, 0xffffff, 0.5).setVisible(false).setScrollFactor(0);
-
-        // 4. Camera
-        this.cameras.main.startFollow(this.car, true, 0.1, 0.1);
-        this.cameras.main.setZoom(1.5);
-
-        // 5. Input Logic
-        this.input.on('pointerdown', (pointer) => {
-            this.joyBase.setPosition(pointer.x, pointer.y).setVisible(true);
-            this.joyThumb.setPosition(pointer.x, pointer.y).setVisible(true);
-        });
-
-        this.input.on('pointermove', (pointer) => {
-            if (pointer.isDown) {
-                // Clamp thumb stick distance
-                const angle = Phaser.Math.Angle.Between(this.joyBase.x, this.joyBase.y, pointer.x, pointer.y);
-                const dist = Phaser.Math.Distance.Between(this.joyBase.x, this.joyBase.y, pointer.x, pointer.y);
-                const maxDist = 50;
-                
-                const thumbDist = Math.min(dist, maxDist);
-                this.joyThumb.x = this.joyBase.x + Math.cos(angle) * thumbDist;
-                this.joyThumb.y = this.joyBase.y + Math.sin(angle) * thumbDist;
-
-                // Store movement data
-                this.moveAngle = angle;
-                this.moveForce = thumbDist / maxDist;
-            }
-        });
-
-        this.input.on('pointerup', () => {
-            this.joyBase.setVisible(false);
-            this.joyThumb.setVisible(false);
-            this.moveForce = 0;
-        });
-    }
-
-    update() {
-        if (!this.car.body) return;
-        const body = this.car.body;
-
-        // --- 1. MOVEMENT ---
-        if (this.moveForce > 0) {
-            // Rotate car toward stick direction
-            this.car.rotation = Phaser.Math.Angle.RotateTo(this.car.rotation, this.moveAngle, 0.1);
-            
-            // Apply thrust
-            const power = 0.008 * this.moveForce;
-            this.car.applyForce({
-                x: Math.cos(this.car.rotation) * power,
-                y: Math.sin(this.car.rotation) * power
-            });
-        }
-
-        // --- 2. DRIFT LOGIC ---
-        const sideVector = new Phaser.Math.Vector2(Math.cos(this.car.rotation + Math.PI/2), Math.sin(this.car.rotation + Math.PI/2));
-        const lateralVel = sideVector.clone().multiply(new Phaser.Math.Vector2(body.velocity.x, body.velocity.y).dot(sideVector));
-        this.car.setVelocity(body.velocity.x - lateralVel.x * 0.9, body.velocity.y - lateralVel.y * 0.9);
-
-        // --- 3. CAMERA LEAD ---
-        this.cameras.main.setFollowOffset(body.velocity.x * 10, body.velocity.y * 10);
-    }
-}
-
-const config = {
-    type: Phaser.AUTO,
-    width: window.innerWidth,
-    height: window.innerHeight,
-    backgroundColor: '#222222',
-    physics: { default: 'matter', matter: { gravity: { y: 0 } } },
-    scene: MainScene,
-    scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH }
+// 1. Car Properties
+let car = {
+    x: 200, y: 200,
+    angle: 0,
+    velX: 0, velY: 0,
+    width: 30, height: 15,
+    power: 0.15,
+    grip: 0.92 // Lower = more drift
 };
 
-new Phaser.Game(config);
+// 2. Input Handling
+let joystick = { active: false, x: 0, y: 0, currX: 0, currY: 0 };
+
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Touch Events
+canvas.addEventListener('touchstart', e => {
+    joystick.active = true;
+    joystick.x = e.touches[0].clientX;
+    joystick.y = e.touches[0].clientY;
+    joystick.currX = joystick.x;
+    joystick.currY = joystick.y;
+});
+
+canvas.addEventListener('touchmove', e => {
+    if(joystick.active) {
+        joystick.currX = e.touches[0].clientX;
+        joystick.currY = e.touches[0].clientY;
+    }
+});
+
+canvas.addEventListener('touchend', () => joystick.active = false);
+
+// 3. Game Loop
+function update() {
+    if (joystick.active) {
+        const dx = joystick.currX - joystick.x;
+        const dy = joystick.currY - joystick.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        
+        if (dist > 5) {
+            const targetAngle = Math.atan2(dy, dx);
+            // Smooth rotation
+            let diff = targetAngle - car.angle;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            car.angle += diff * 0.1;
+
+            // Apply Thrust
+            const force = Math.min(dist / 50, 1) * car.power;
+            car.velX += Math.cos(car.angle) * force;
+            car.velY += Math.sin(car.angle) * force;
+        }
+    }
+
+    // 4. Drift Logic (The "Secret Sauce")
+    // Find forward vs sideways velocity
+    const sn = Math.sin(car.angle);
+    const cs = Math.cos(car.angle);
+    
+    // Project velocity onto the "side" of the car
+    let lateralVelX = -sn * (car.velX * -sn + car.velY * cs);
+    let lateralVelY = cs * (car.velX * -sn + car.velY * cs);
+
+    // Kill lateral velocity based on grip
+    car.velX -= lateralVelX * (1 - car.grip);
+    car.velY -= lateralVelY * (1 - car.grip);
+
+    // Friction & Position
+    car.velX *= 0.98;
+    car.velY *= 0.98;
+    car.x += car.velX;
+    car.y += car.velY;
+
+    // Screen wrap
+    if(car.x > canvas.width) car.x = 0;
+    if(car.x < 0) car.x = canvas.width;
+    if(car.y > canvas.height) car.y = 0;
+    if(car.y < 0) car.y = canvas.height;
+
+    draw();
+    requestAnimationFrame(update);
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw Joystick
+    if(joystick.active) {
+        ctx.beginPath();
+        ctx.arc(joystick.x, joystick.y, 40, 0, Math.PI*2);
+        ctx.strokeStyle = "rgba(255,255,255,0.2)";
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(joystick.currX, joystick.currY, 20, 0, Math.PI*2);
+        ctx.fillStyle = "rgba(255,255,255,0.5)";
+        ctx.fill();
+    }
+
+    // Draw Car
+    ctx.save();
+    ctx.translate(car.x, car.y);
+    ctx.rotate(car.angle);
+    // Body
+    ctx.fillStyle = "#ff4444";
+    ctx.fillRect(-car.width/2, -car.height/2, car.width, car.height);
+    // Windows/Direction indicator
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(5, -car.height/2 + 2, 5, car.height - 4);
+    ctx.restore();
+}
+
+update();
 </script>
 </body>
 </html>
