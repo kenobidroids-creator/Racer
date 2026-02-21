@@ -5,19 +5,41 @@
     <style>
         body { margin: 0; background: #111; overflow: hidden; touch-action: none; font-family: 'Courier New', Courier, monospace; }
         canvas { display: block; background: #222; }
-        #ui { position: absolute; top: 20px; left: 20px; color: #fff; pointer-events: none; font-size: 20px; text-shadow: 2px 2px #000; }
+        #ui { position: absolute; top: 20px; left: 20px; color: #fff; pointer-events: none; font-size: 20px; text-shadow: 2px 2px #000; z-index: 10; }
+        #overlay { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            display: flex; flex-direction: column; justify-content: center; align-items: center; 
+            background: rgba(0,0,0,0.5); z-index: 20; 
+        }
+        button { 
+            padding: 20px 40px; font-size: 24px; font-family: 'Courier New'; 
+            background: #ff4444; color: white; border: none; cursor: pointer; border-radius: 10px;
+        }
+        #countdown { color: #fff; font-size: 80px; font-weight: bold; text-shadow: 4px 4px #000; display: none; }
     </style>
 </head>
 <body>
     <div id="ui">LAP: <span id="lapCount">0</span></div>
+    
+    <div id="overlay">
+        <button id="startBtn">START RACE</button>
+        <div id="countdown">3</div>
+    </div>
+
     <canvas id="gameCanvas"></canvas>
 
 <script>
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const lapDisplay = document.getElementById('lapCount');
+const overlay = document.getElementById('overlay');
+const startBtn = document.getElementById('startBtn');
+const countdownEl = document.getElementById('countdown');
 
-// 1. Snappier Car Stats
+// 1. Game States: 'WAITING', 'COUNTDOWN', 'RACING'
+let gameState = 'WAITING';
+
+// 2. Car Stats
 let car = { x: 300, y: 150, angle: 0, velX: 0, velY: 0, width: 30, height: 15, radius: 12, power: 0.25, turnSpeed: 0.18, grip: 0.90, color: "#ff4444" };
 let aiCar = { x: 300, y: 220, angle: 0, velX: 0, velY: 0, width: 30, height: 15, radius: 12, power: 0.18, turnSpeed: 0.1, grip: 0.88, color: "#4444ff" };
 
@@ -25,24 +47,40 @@ let joystick = { active: false, x: 0, y: 0, currX: 0, currY: 0 };
 let laps = 0;
 let canScoreLap = false;
 
-// 2. Open Track Design (Rectangles acting as rails)
 const walls = [
-    {x: 50, y: 50, w: 1900, h: 20},   // Top Rail
-    {x: 50, y: 1050, w: 1900, h: 20}, // Bottom Rail
-    {x: 50, y: 50, w: 20, h: 1000},   // Left Rail
-    {x: 1930, y: 50, w: 20, h: 1000}, // Right Rail
-    // A single smaller island in the center to make it a loop
+    {x: 50, y: 50, w: 1900, h: 20}, {x: 50, y: 1050, w: 1900, h: 20}, 
+    {x: 50, y: 50, w: 20, h: 1000}, {x: 1930, y: 50, w: 20, h: 1000},
     {x: 400, y: 350, w: 1200, h: 400} 
 ];
 
-const waypoints = [
-    {x: 1750, y: 200}, {x: 1750, y: 900}, {x: 250, y: 900}, {x: 250, y: 200}
-];
+const waypoints = [ {x: 1750, y: 200}, {x: 1750, y: 900}, {x: 250, y: 900}, {x: 250, y: 200} ];
 let aiTargetIdx = 0;
 
 function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
 window.addEventListener('resize', resize); resize();
 
+// START LOGIC
+startBtn.addEventListener('click', () => {
+    startBtn.style.display = 'none';
+    countdownEl.style.display = 'block';
+    gameState = 'COUNTDOWN';
+    let count = 3;
+    
+    let timer = setInterval(() => {
+        count--;
+        if (count > 0) {
+            countdownEl.innerText = count;
+        } else if (count === 0) {
+            countdownEl.innerText = "GO!";
+        } else {
+            clearInterval(timer);
+            overlay.style.display = 'none';
+            gameState = 'RACING';
+        }
+    }, 1000);
+});
+
+// Input handling
 canvas.addEventListener('touchstart', e => {
     joystick.active = true; joystick.x = e.touches[0].clientX; joystick.y = e.touches[0].clientY;
     joystick.currX = joystick.x; joystick.currY = joystick.y;
@@ -51,84 +89,60 @@ canvas.addEventListener('touchmove', e => { if(joystick.active) { joystick.currX
 canvas.addEventListener('touchend', () => joystick.active = false);
 
 function applyPhysics(obj) {
-    // Lateral Friction (Drift)
     const sn = Math.sin(obj.angle), cs = Math.cos(obj.angle);
     let lateralVelX = -sn * (obj.velX * -sn + obj.velY * cs);
     let lateralVelY = cs * (obj.velX * -sn + obj.velY * cs);
     obj.velX -= lateralVelX * (1 - obj.grip);
     obj.velY -= lateralVelY * (1 - obj.grip);
-    
-    obj.velX *= 0.97; obj.velY *= 0.97; // Air drag
+    obj.velX *= 0.97; obj.velY *= 0.97;
 
-    // Wall Collision
     for (let wall of walls) {
         if (obj.x + obj.velX + obj.radius > wall.x && obj.x + obj.velX - obj.radius < wall.x + wall.w &&
-            obj.y + obj.radius > wall.y && obj.y - obj.radius < wall.y + wall.h) {
-            obj.velX *= -0.5;
-        }
+            obj.y + obj.radius > wall.y && obj.y - obj.radius < wall.y + wall.h) obj.velX *= -0.5;
         if (obj.x + obj.radius > wall.x && obj.x - obj.radius < wall.x + wall.w &&
-            obj.y + obj.velY + obj.radius > wall.y && obj.y + obj.velY - obj.radius < wall.y + wall.h) {
-            obj.velY *= -0.5;
-        }
+            obj.y + obj.velY + obj.radius > wall.y && obj.y + obj.velY - obj.radius < wall.y + wall.h) obj.velY *= -0.5;
     }
     obj.x += obj.velX; obj.y += obj.velY;
 }
 
-function checkCarCollision() {
-    const dx = car.x - aiCar.x;
-    const dy = car.y - aiCar.y;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-    const minFinish = car.radius + aiCar.radius;
-
-    if (distance < minFinish) {
-        // Simple "Scrap Metal" bounce impact
-        const angle = Math.atan2(dy, dx);
-        const force = 2;
-        car.velX += Math.cos(angle) * force;
-        car.velY += Math.sin(angle) * force;
-        aiCar.velX -= Math.cos(angle) * force;
-        aiCar.velY -= Math.sin(angle) * force;
-    }
-}
-
 function update() {
-    // Player Control
-    if (joystick.active) {
-        const dx = joystick.currX - joystick.x, dy = joystick.currY - joystick.y;
-        const dist = Math.sqrt(dx*dx + dy*dy);
-        if (dist > 5) {
-            const targetAngle = Math.atan2(dy, dx);
-            let diff = targetAngle - car.angle;
-            while (diff < -Math.PI) diff += Math.PI * 2;
-            while (diff > Math.PI) diff -= Math.PI * 2;
-            car.angle += diff * car.turnSpeed; // Use stats
-            const f = Math.min(dist / 50, 1) * car.power;
-            car.velX += Math.cos(car.angle) * f;
-            car.velY += Math.sin(car.angle) * f;
+    if (gameState === 'RACING') {
+        // Player Control
+        if (joystick.active) {
+            const dx = joystick.currX - joystick.x, dy = joystick.currY - joystick.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            if (dist > 5) {
+                const targetAngle = Math.atan2(dy, dx);
+                let diff = targetAngle - car.angle;
+                while (diff < -Math.PI) diff += Math.PI * 2;
+                while (diff > Math.PI) diff -= Math.PI * 2;
+                car.angle += diff * car.turnSpeed;
+                const f = Math.min(dist / 50, 1) * car.power;
+                car.velX += Math.cos(car.angle) * f;
+                car.velY += Math.sin(car.angle) * f;
+            }
         }
-    }
 
-    // AI Control
-    let target = waypoints[aiTargetIdx];
-    let distToWp = Math.sqrt((target.x-aiCar.x)**2 + (target.y-aiCar.y)**2);
-    if(distToWp < 120) aiTargetIdx = (aiTargetIdx + 1) % waypoints.length;
-    
-    let aiTargetAngle = Math.atan2(target.y - aiCar.y, target.x - aiCar.x);
-    let aiDiff = aiTargetAngle - aiCar.angle;
-    while (aiDiff < -Math.PI) aiDiff += Math.PI * 2;
-    while (aiDiff > Math.PI) aiDiff -= Math.PI * 2;
-    aiCar.angle += aiDiff * aiCar.turnSpeed;
-    aiCar.velX += Math.cos(aiCar.angle) * aiCar.power;
-    aiCar.velY += Math.sin(aiCar.angle) * aiCar.power;
+        // AI Control
+        let target = waypoints[aiTargetIdx];
+        let distToWp = Math.sqrt((target.x-aiCar.x)**2 + (target.y-aiCar.y)**2);
+        if(distToWp < 120) aiTargetIdx = (aiTargetIdx + 1) % waypoints.length;
+        let aiTargetAngle = Math.atan2(target.y - aiCar.y, target.x - aiCar.x);
+        let aiDiff = aiTargetAngle - aiCar.angle;
+        while (aiDiff < -Math.PI) aiDiff += Math.PI * 2;
+        while (aiDiff > Math.PI) aiDiff -= Math.PI * 2;
+        aiCar.angle += aiDiff * aiCar.turnSpeed;
+        aiCar.velX += Math.cos(aiCar.angle) * aiCar.power;
+        aiCar.velY += Math.sin(aiCar.angle) * aiCar.power;
 
-    applyPhysics(car);
-    applyPhysics(aiCar);
-    checkCarCollision();
+        applyPhysics(car);
+        applyPhysics(aiCar);
 
-    // Laps
-    if (car.x > 1000) canScoreLap = true;
-    if (canScoreLap && car.x < 400 && car.y < 350) {
-        laps++; lapDisplay.innerText = laps; canScoreLap = false;
+        // Lap Logic
+        if (car.x > 1000) canScoreLap = true;
+        if (canScoreLap && car.x < 400 && car.y < 350) {
+            laps++; lapDisplay.innerText = laps; canScoreLap = false;
+        }
     }
 
     draw();
@@ -140,30 +154,23 @@ function draw() {
     ctx.save();
     ctx.translate(canvas.width/2 - car.x, canvas.height/2 - car.y);
 
-    // Track Surface
     ctx.fillStyle = "#333"; ctx.fillRect(0, 0, 2000, 1100);
-    
-    // Checkered Finish Line
     ctx.fillStyle = "#fff";
     for(let i=0; i<6; i++) ctx.fillRect(320, 70 + (i*40), 20, 20);
-
-    // Walls
     ctx.fillStyle = "#666";
     for (let wall of walls) ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
 
-    // Draw Cars
     [car, aiCar].forEach(c => {
         ctx.save();
         ctx.translate(c.x, c.y); ctx.rotate(c.angle);
         ctx.fillStyle = c.color;
         ctx.fillRect(-c.width/2, -c.height/2, c.width, c.height);
-        ctx.fillStyle = "#fff"; ctx.fillRect(5, -c.height/2 + 2, 5, c.height - 4);
+        ctx.fillStyle = "#fff"; ctx.fillRect(5, -car.height/2 + 2, 5, car.height - 4);
         ctx.restore();
     });
 
     ctx.restore();
-
-    if(joystick.active) {
+    if(joystick.active && gameState === 'RACING') {
         ctx.beginPath(); ctx.arc(joystick.x, joystick.y, 40, 0, Math.PI*2);
         ctx.strokeStyle = "rgba(255,255,255,0.2)"; ctx.stroke();
     }
