@@ -4,8 +4,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"></script>
     <style> 
-        body { margin: 0; background: #222; overflow: hidden; } 
-        canvas { display: block; }
+        body { margin: 0; background: #222; overflow: hidden; touch-action: none; } 
     </style>
 </head>
 <body>
@@ -13,121 +12,92 @@
 class MainScene extends Phaser.Scene {
     constructor() { super('MainScene'); }
 
-    preload() {
-        // Load the joystick plugin from a stable URL
-        this.load.plugin('rexvirtualjoystickplugin', 'https://cdn.jsdelivr.net/gh/rexrainbow/phaser3-rex-notes@master/dist/rexvirtualjoystickplugin.min.js', true);
-    }
-
     create() {
-        // 1. Setup World & Physics
-        this.matter.world.setBounds(0, 0, 1600, 1200);
+        // 1. World Setup
+        this.matter.world.setBounds(0, 0, 2000, 2000);
         
-        // Add basic obstacles (Walls)
-        this.matter.add.rectangle(400, 150, 400, 40, { isStatic: true, label: 'wall' });
-        this.matter.add.rectangle(800, 500, 40, 600, { isStatic: true, label: 'wall' });
-
-        // 2. The Car Chassis (A red rectangle for now)
+        // 2. The Car
         this.car = this.add.rectangle(400, 300, 40, 20, 0xff4444);
         this.matter.add.gameObject(this.car);
         this.car.setFrictionAir(0.05);
         this.car.setMass(15);
-        this.car.body.restitution = 0.5;
 
-        // 3. Tire Smoke Particles
-        const graphics = this.make.graphics({ x: 0, y: 0, add: false });
-        graphics.fillStyle(0xcccccc, 1);
-        graphics.fillRect(0, 0, 4, 4);
-        graphics.generateTexture('smoke', 4, 4);
+        // 3. Simple Touch UI (The "Stick")
+        this.joyBase = this.add.circle(0, 0, 50, 0xffffff, 0.2).setVisible(false).setScrollFactor(0);
+        this.joyThumb = this.add.circle(0, 0, 25, 0xffffff, 0.5).setVisible(false).setScrollFactor(0);
 
-        this.smokeEmitter = this.add.particles(0, 0, 'smoke', {
-            speed: { min: 10, max: 50 },
-            scale: { start: 0.8, end: 0 },
-            alpha: { start: 0.5, end: 0 },
-            lifespan: 300,
-            emitting: false
-        });
-
-        // 4. Virtual Joysticks (Positioned relative to screen size)
-        const vW = window.innerWidth;
-        const vH = window.innerHeight;
-
-        this.leftJoy = this.plugins.get('rexvirtualjoystickplugin').add(this, {
-            x: 80, y: vH - 80, radius: 50,
-            base: this.add.circle(0, 0, 50, 0x888888, 0.5).setScrollFactor(0),
-            thumb: this.add.circle(0, 0, 25, 0xcccccc, 0.8).setScrollFactor(0),
-        });
-
-        this.rightJoy = this.plugins.get('rexvirtualjoystickplugin').add(this, {
-            x: vW - 80, y: vH - 80, radius: 50,
-            base: this.add.circle(0, 0, 50, 0x888888, 0.5).setScrollFactor(0),
-            thumb: this.add.circle(0, 0, 25, 0x4444ff, 0.8).setScrollFactor(0),
-        });
-
-        // 5. Camera Setup
+        // 4. Camera
         this.cameras.main.startFollow(this.car, true, 0.1, 0.1);
         this.cameras.main.setZoom(1.5);
-        this.cameras.main.setBounds(0, 0, 1600, 1200);
 
-        // Add a debug text for mobile
-        this.debugText = this.add.text(10, 10, 'Drive with Left Stick', { font: '16px Arial', fill: '#00ff00' }).setScrollFactor(0);
+        // 5. Input Logic
+        this.input.on('pointerdown', (pointer) => {
+            this.joyBase.setPosition(pointer.x, pointer.y).setVisible(true);
+            this.joyThumb.setPosition(pointer.x, pointer.y).setVisible(true);
+        });
+
+        this.input.on('pointermove', (pointer) => {
+            if (pointer.isDown) {
+                // Clamp thumb stick distance
+                const angle = Phaser.Math.Angle.Between(this.joyBase.x, this.joyBase.y, pointer.x, pointer.y);
+                const dist = Phaser.Math.Distance.Between(this.joyBase.x, this.joyBase.y, pointer.x, pointer.y);
+                const maxDist = 50;
+                
+                const thumbDist = Math.min(dist, maxDist);
+                this.joyThumb.x = this.joyBase.x + Math.cos(angle) * thumbDist;
+                this.joyThumb.y = this.joyBase.y + Math.sin(angle) * thumbDist;
+
+                // Store movement data
+                this.moveAngle = angle;
+                this.moveForce = thumbDist / maxDist;
+            }
+        });
+
+        this.input.on('pointerup', () => {
+            this.joyBase.setVisible(false);
+            this.joyThumb.setVisible(false);
+            this.moveForce = 0;
+        });
     }
 
-    update(time, delta) {
+    update() {
         if (!this.car.body) return;
         const body = this.car.body;
 
-        // --- 1. MOVEMENT (Left Stick) ---
-        if (this.leftJoy.force > 0) {
-            this.car.rotation = Phaser.Math.Angle.RotateTo(this.car.rotation, this.leftJoy.rotation, 0.1);
-            const speed = 0.007 * this.leftJoy.force;
+        // --- 1. MOVEMENT ---
+        if (this.moveForce > 0) {
+            // Rotate car toward stick direction
+            this.car.rotation = Phaser.Math.Angle.RotateTo(this.car.rotation, this.moveAngle, 0.1);
+            
+            // Apply thrust
+            const power = 0.008 * this.moveForce;
             this.car.applyForce({
-                x: Math.cos(this.car.rotation) * speed,
-                y: Math.sin(this.car.rotation) * speed
+                x: Math.cos(this.car.rotation) * power,
+                y: Math.sin(this.car.rotation) * power
             });
         }
 
-        // --- 2. DRIFT & SMOKE LOGIC ---
+        // --- 2. DRIFT LOGIC ---
         const sideVector = new Phaser.Math.Vector2(Math.cos(this.car.rotation + Math.PI/2), Math.sin(this.car.rotation + Math.PI/2));
         const lateralVel = sideVector.clone().multiply(new Phaser.Math.Vector2(body.velocity.x, body.velocity.y).dot(sideVector));
-        
-        // Kill 90% of sideways momentum (Grip)
         this.car.setVelocity(body.velocity.x - lateralVel.x * 0.9, body.velocity.y - lateralVel.y * 0.9);
 
-        // Emit smoke during hard slides
-        if (lateralVel.length() > 1.8) {
-            this.smokeEmitter.emitParticleAt(this.car.x, this.car.y);
-        }
-
         // --- 3. CAMERA LEAD ---
-        const lookAhead = 10; 
-        this.cameras.main.setFollowOffset(body.velocity.x * lookAhead, body.velocity.y * lookAhead);
-        
-        // Vibration on impact
-        if (body.speed > 4 && this.matter.world.engine.pairs.list.length > 0) {
-            this.cameras.main.shake(100, 0.005);
-        }
+        this.cameras.main.setFollowOffset(body.velocity.x * 10, body.velocity.y * 10);
     }
 }
 
-// Config optimized for browser-based pixel games
 const config = {
     type: Phaser.AUTO,
     width: window.innerWidth,
     height: window.innerHeight,
-    pixelArt: true,
     backgroundColor: '#222222',
-    physics: { 
-        default: 'matter', 
-        matter: { gravity: { y: 0 }, debug: false } 
-    },
+    physics: { default: 'matter', matter: { gravity: { y: 0 } } },
     scene: MainScene,
-    scale: {
-        mode: Phaser.Scale.RESIZE,
-        autoCenter: Phaser.Scale.CENTER_BOTH
-    }
+    scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH }
 };
 
-const game = new Phaser.Game(config);
+new Phaser.Game(config);
 </script>
 </body>
 </html>
