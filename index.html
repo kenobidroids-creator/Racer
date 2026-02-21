@@ -9,12 +9,14 @@
         #overlay { 
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
             display: flex; flex-direction: column; justify-content: center; align-items: center; 
-            background: rgba(0,0,0,0.5); z-index: 20; 
+            background: rgba(0,0,0,0.6); z-index: 20; 
         }
         button { 
             padding: 20px 40px; font-size: 24px; font-family: 'Courier New'; 
             background: #ff4444; color: white; border: none; cursor: pointer; border-radius: 10px;
+            box-shadow: 0 5px #a32;
         }
+        button:active { transform: translateY(3px); box-shadow: 0 2px #a32; }
         #countdown { color: #fff; font-size: 80px; font-weight: bold; text-shadow: 4px 4px #000; display: none; }
     </style>
 </head>
@@ -36,12 +38,12 @@ const overlay = document.getElementById('overlay');
 const startBtn = document.getElementById('startBtn');
 const countdownEl = document.getElementById('countdown');
 
-// 1. Game States: 'WAITING', 'COUNTDOWN', 'RACING'
+// 1. Game State
 let gameState = 'WAITING';
 
 // 2. Car Stats
-let car = { x: 300, y: 150, angle: 0, velX: 0, velY: 0, width: 30, height: 15, radius: 12, power: 0.25, turnSpeed: 0.18, grip: 0.90, color: "#ff4444" };
-let aiCar = { x: 300, y: 220, angle: 0, velX: 0, velY: 0, width: 30, height: 15, radius: 12, power: 0.18, turnSpeed: 0.1, grip: 0.88, color: "#4444ff" };
+let car = { x: 300, y: 150, angle: 0, velX: 0, velY: 0, width: 30, height: 15, radius: 15, power: 0.25, turnSpeed: 0.18, grip: 0.90, color: "#ff4444" };
+let aiCar = { x: 300, y: 220, angle: 0, velX: 0, velY: 0, width: 30, height: 15, radius: 15, power: 0.18, turnSpeed: 0.1, grip: 0.88, color: "#4444ff" };
 
 let joystick = { active: false, x: 0, y: 0, currX: 0, currY: 0 };
 let laps = 0;
@@ -65,14 +67,11 @@ startBtn.addEventListener('click', () => {
     countdownEl.style.display = 'block';
     gameState = 'COUNTDOWN';
     let count = 3;
-    
     let timer = setInterval(() => {
         count--;
-        if (count > 0) {
-            countdownEl.innerText = count;
-        } else if (count === 0) {
-            countdownEl.innerText = "GO!";
-        } else {
+        if (count > 0) countdownEl.innerText = count;
+        else if (count === 0) countdownEl.innerText = "GO!";
+        else {
             clearInterval(timer);
             overlay.style.display = 'none';
             gameState = 'RACING';
@@ -97,17 +96,34 @@ function applyPhysics(obj) {
     obj.velX *= 0.97; obj.velY *= 0.97;
 
     for (let wall of walls) {
-        if (obj.x + obj.velX + obj.radius > wall.x && obj.x + obj.velX - obj.radius < wall.x + wall.w &&
-            obj.y + obj.radius > wall.y && obj.y - obj.radius < wall.y + wall.h) obj.velX *= -0.5;
-        if (obj.x + obj.radius > wall.x && obj.x - obj.radius < wall.x + wall.w &&
-            obj.y + obj.velY + obj.radius > wall.y && obj.y + obj.velY - obj.radius < wall.y + wall.h) obj.velY *= -0.5;
+        if (obj.x + obj.velX + 12 > wall.x && obj.x + obj.velX - 12 < wall.x + wall.w &&
+            obj.y + 12 > wall.y && obj.y - 12 < wall.y + wall.h) obj.velX *= -0.5;
+        if (obj.x + 12 > wall.x && obj.x - 12 < wall.x + wall.w &&
+            obj.y + obj.velY + 12 > wall.y && obj.y + obj.velY - 12 < wall.y + wall.h) obj.velY *= -0.5;
     }
     obj.x += obj.velX; obj.y += obj.velY;
 }
 
+// THE MISSING BUMP LOGIC
+function checkCarCollision() {
+    const dx = car.x - aiCar.x;
+    const dy = car.y - aiCar.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    const minDistance = car.radius + aiCar.radius;
+
+    if (distance < minDistance) {
+        const angle = Math.atan2(dy, dx);
+        const pushForce = 1.5;
+        // Push both cars away from each other
+        car.velX += Math.cos(angle) * pushForce;
+        car.velY += Math.sin(angle) * pushForce;
+        aiCar.velX -= Math.cos(angle) * pushForce;
+        aiCar.velY -= Math.sin(angle) * pushForce;
+    }
+}
+
 function update() {
     if (gameState === 'RACING') {
-        // Player Control
         if (joystick.active) {
             const dx = joystick.currX - joystick.x, dy = joystick.currY - joystick.y;
             const dist = Math.sqrt(dx*dx + dy*dy);
@@ -123,7 +139,6 @@ function update() {
             }
         }
 
-        // AI Control
         let target = waypoints[aiTargetIdx];
         let distToWp = Math.sqrt((target.x-aiCar.x)**2 + (target.y-aiCar.y)**2);
         if(distToWp < 120) aiTargetIdx = (aiTargetIdx + 1) % waypoints.length;
@@ -137,14 +152,13 @@ function update() {
 
         applyPhysics(car);
         applyPhysics(aiCar);
+        checkCarCollision(); // Check collision between cars
 
-        // Lap Logic
         if (car.x > 1000) canScoreLap = true;
         if (canScoreLap && car.x < 400 && car.y < 350) {
             laps++; lapDisplay.innerText = laps; canScoreLap = false;
         }
     }
-
     draw();
     requestAnimationFrame(update);
 }
@@ -165,7 +179,7 @@ function draw() {
         ctx.translate(c.x, c.y); ctx.rotate(c.angle);
         ctx.fillStyle = c.color;
         ctx.fillRect(-c.width/2, -c.height/2, c.width, c.height);
-        ctx.fillStyle = "#fff"; ctx.fillRect(5, -car.height/2 + 2, 5, car.height - 4);
+        ctx.fillStyle = "#fff"; ctx.fillRect(5, -c.height/2 + 2, 5, c.height - 4);
         ctx.restore();
     });
 
