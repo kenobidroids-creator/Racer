@@ -49,6 +49,10 @@ let joystick = { active: false, x: 0, y: 0, currX: 0, currY: 0 };
 let laps = 0;
 let canScoreLap = false;
 
+// FPS CAP LOGIC
+let lastTime = performance.now();
+const fpsInterval = 1000 / 60; 
+
 const walls = [
     {x: 50, y: 50, w: 1900, h: 20}, {x: 50, y: 1050, w: 1900, h: 20}, 
     {x: 50, y: 50, w: 20, h: 1000}, {x: 1930, y: 50, w: 20, h: 1000},
@@ -79,13 +83,15 @@ startBtn.addEventListener('click', () => {
     }, 1000);
 });
 
-// Input handling
-canvas.addEventListener('touchstart', e => {
-    joystick.active = true; joystick.x = e.touches[0].clientX; joystick.y = e.touches[0].clientY;
+// MOUSE & TOUCH SUPPORT
+canvas.addEventListener('pointerdown', e => {
+    joystick.active = true; joystick.x = e.clientX; joystick.y = e.clientY;
     joystick.currX = joystick.x; joystick.currY = joystick.y;
 });
-canvas.addEventListener('touchmove', e => { if(joystick.active) { joystick.currX = e.touches[0].clientX; joystick.currY = e.touches[0].clientY; } });
-canvas.addEventListener('touchend', () => joystick.active = false);
+canvas.addEventListener('pointermove', e => { 
+    if(joystick.active) { joystick.currX = e.clientX; joystick.currY = e.clientY; } 
+});
+window.addEventListener('pointerup', () => joystick.active = false);
 
 function applyPhysics(obj) {
     const sn = Math.sin(obj.angle), cs = Math.cos(obj.angle);
@@ -104,7 +110,6 @@ function applyPhysics(obj) {
     obj.x += obj.velX; obj.y += obj.velY;
 }
 
-// THE MISSING BUMP LOGIC
 function checkCarCollision() {
     const dx = car.x - aiCar.x;
     const dy = car.y - aiCar.y;
@@ -114,12 +119,20 @@ function checkCarCollision() {
     if (distance < minDistance) {
         const angle = Math.atan2(dy, dx);
         const pushForce = 1.5;
-        // Push both cars away from each other
         car.velX += Math.cos(angle) * pushForce;
         car.velY += Math.sin(angle) * pushForce;
         aiCar.velX -= Math.cos(angle) * pushForce;
         aiCar.velY -= Math.sin(angle) * pushForce;
     }
+}
+
+// MAIN LOOP WITH FPS CAP
+function gameLoop(time) {
+    requestAnimationFrame(gameLoop);
+    const elapsed = time - lastTime;
+    if (elapsed < fpsInterval) return;
+    lastTime = time - (elapsed % fpsInterval);
+    update();
 }
 
 function update() {
@@ -152,7 +165,7 @@ function update() {
 
         applyPhysics(car);
         applyPhysics(aiCar);
-        checkCarCollision(); // Check collision between cars
+        checkCarCollision();
 
         if (car.x > 1000) canScoreLap = true;
         if (canScoreLap && car.x < 400 && car.y < 350) {
@@ -160,7 +173,6 @@ function update() {
         }
     }
     draw();
-    requestAnimationFrame(update);
 }
 
 function draw() {
@@ -189,7 +201,8 @@ function draw() {
         ctx.strokeStyle = "rgba(255,255,255,0.2)"; ctx.stroke();
     }
 }
-update();
+// Start the capped loop
+requestAnimationFrame(gameLoop);
 </script>
 </body>
 </html>
