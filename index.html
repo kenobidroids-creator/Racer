@@ -3,34 +3,36 @@
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
-        body { margin: 0; background: #111; overflow: hidden; touch-action: none; font-family: 'Courier New', Courier, monospace; }
-        canvas { display: block; background: #222; }
-        #ui { position: absolute; top: 20px; left: 20px; color: #fff; pointer-events: none; font-size: 18px; text-shadow: 2px 2px #000; z-index: 10; line-height: 1.5; }
+        body { margin: 0; background: #000; overflow: hidden; touch-action: none; font-family: 'Courier New', Courier, monospace; }
+        canvas { display: block; background: #1a1a1a; }
+        #ui { position: absolute; top: 20px; left: 20px; color: #0cf; pointer-events: none; font-size: 18px; text-shadow: 2px 2px #000; z-index: 10; }
         #overlay { 
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
             display: flex; flex-direction: column; justify-content: center; align-items: center; 
-            background: rgba(0,0,0,0.7); z-index: 20; 
+            background: rgba(0,0,0,0.8); z-index: 20; color: white;
         }
         button { 
             padding: 20px 40px; font-size: 24px; font-family: 'Courier New'; 
-            background: #ff4444; color: white; border: none; cursor: pointer; border-radius: 10px;
-            box-shadow: 0 5px #a32; margin: 10px;
+            background: #0cf; color: #000; border: none; cursor: pointer; border-radius: 5px;
+            font-weight: bold; box-shadow: 0 0 15px #0cf;
         }
-        #nitro-bar { width: 150px; height: 10px; background: #444; border: 1px solid #fff; display: inline-block; vertical-align: middle; }
-        #nitro-fill { height: 100%; background: #0cf; width: 0%; transition: width 0.1s; }
+        .bar-bg { width: 150px; height: 12px; background: #333; border: 1px solid #555; display: inline-block; }
+        #nitro-fill { height: 100%; background: #0cf; width: 0%; box-shadow: 0 0 10px #0cf; }
+        #hp-fill { height: 100%; background: #f44; width: 100%; }
     </style>
 </head>
 <body>
     <div id="ui">
         LAP: <span id="lapCount">0</span>/3<br>
-        HEALTH: <span id="hp">100</span>%<br>
-        NITRO: <div id="nitro-bar"><div id="nitro-fill"></div></div>
+        HP: <div class="bar-bg"><div id="hp-fill"></div></div><br>
+        NITRO: <div class="bar-bg"><div id="nitro-fill"></div></div>
     </div>
     
     <div id="overlay">
-        <button id="startBtn">START RACE</button>
-        <button id="resetBtn" style="display:none; background:#555;">REPAIR & RESET</button>
-        <div id="countdown" style="color:white; font-size:80px; display:none;">3</div>
+        <h1 style="color:#0cf">SCRAP RACER</h1>
+        <button id="startBtn">ENGINE START</button>
+        <button id="resetBtn" style="display:none;">REBUILD CAR</button>
+        <p id="msg"></p>
     </div>
 
     <canvas id="gameCanvas"></canvas>
@@ -39,21 +41,21 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const lapDisplay = document.getElementById('lapCount');
-const hpDisplay = document.getElementById('hp');
+const hpFill = document.getElementById('hp-fill');
 const nitroFill = document.getElementById('nitro-fill');
 const overlay = document.getElementById('overlay');
 const startBtn = document.getElementById('startBtn');
 const resetBtn = document.getElementById('resetBtn');
-const countdownEl = document.getElementById('countdown');
+const msg = document.getElementById('msg');
 
 let gameState = 'WAITING';
-let bullets = [], lapGoal = 3;
-let player, aiCars = [], walls, crates, oilSlicks, repairPacks = [];
+let bullets = [], lapGoal = 3, frame = 0;
+let player, aiCars = [], walls, oilSlicks, repairPacks = [];
 
 const circuitWalls = [
-    {x: 50, y: 50, w: 1900, h: 20}, {x: 50, y: 1050, w: 1900, h: 20}, 
-    {x: 50, y: 50, w: 20, h: 1000}, {x: 1930, y: 50, w: 20, h: 1000},
-    {x: 400, y: 350, w: 1200, h: 400} 
+    {x: 50, y: 50, w: 1900, h: 30}, {x: 50, y: 1050, w: 1900, h: 30}, 
+    {x: 50, y: 50, w: 30, h: 1030}, {x: 1920, y: 50, w: 30, h: 1030},
+    {x: 450, y: 400, w: 1100, h: 300} 
 ];
 const waypoints = [{x: 1750, y: 200}, {x: 1750, y: 900}, {x: 250, y: 900}, {x: 250, y: 200}];
 let joystick = { active: false, x: 0, y: 0, currX: 0, currY: 0 };
@@ -61,138 +63,139 @@ let laps = 0, canScoreLap = false;
 
 function init() {
     player = { 
-        x: 300, y: 150, angle: 0, velX: 0, velY: 0, w: 30, h: 15, radius: 15, 
-        power: 0.25, turn: 0.18, grip: 0.90, color: "#ff4444", 
-        hp: 100, spin: 0, dead: false, nitro: 0, boosting: false 
+        x: 300, y: 150, angle: 0, velX: 0, velY: 0, w: 34, h: 18, radius: 16, 
+        power: 0.28, turn: 0.15, grip: 0.90, color: "#f44", 
+        hp: 100, spin: 0, dead: false, nitro: 0, weaponRange: 400, fireRate: 15
     };
-    
     aiCars = [
-        { x: 300, y: 220, angle: 0, velX: 0, velY: 0, w: 25, h: 12, radius: 12, power: 0.23, turn: 0.12, grip: 0.85, color: "#44ff44", hp: 60, targetIdx: 0, dead: false },
-        { x: 250, y: 250, angle: 0, velX: 0, velY: 0, w: 40, h: 22, radius: 18, power: 0.16, turn: 0.08, grip: 0.92, color: "#4444ff", hp: 200, targetIdx: 0, dead: false }
+        { x: 350, y: 250, angle: 0, velX: 0, velY: 0, w: 30, h: 16, radius: 14, power: 0.22, turn: 0.1, grip: 0.88, color: "#4f4", hp: 100, targetIdx: 0, dead: false },
+        { x: 250, y: 250, angle: 0, velX: 0, velY: 0, w: 45, h: 24, radius: 20, power: 0.16, turn: 0.07, grip: 0.93, color: "#44f", hp: 250, targetIdx: 0, dead: false }
     ];
-
-    crates = [{x: 800, y: 150, w: 30, h: 30, active: true}, {x: 1200, y: 950, w: 30, h: 30, active: true}, {x: 1500, y: 500, w: 30, h: 30, active: true}];
-    oilSlicks = [{x: 1000, y: 200, r: 40}, {x: 1700, y: 600, r: 40}];
-    repairPacks = [{x: 1850, y: 550, active: true}];
+    oilSlicks = [{x: 1000, y: 150, r: 50}, {x: 1750, y: 600, r: 50}, {x: 600, y: 900, r: 60}];
+    repairPacks = [{x: 1850, y: 550, active: true}, {x: 150, y: 550, active: true}];
     bullets = []; laps = 0;
 }
 
 init();
 
 startBtn.addEventListener('click', () => {
-    startBtn.style.display = 'none'; countdownEl.style.display = 'block';
-    gameState = 'COUNTDOWN';
-    let count = 3;
-    let t = setInterval(() => {
-        count--; if (count > 0) countdownEl.innerText = count;
-        else if (count === 0) countdownEl.innerText = "GO!";
-        else { clearInterval(t); overlay.style.display = 'none'; gameState = 'RACING'; }
-    }, 1000);
+    startBtn.style.display = 'none'; gameState = 'RACING'; overlay.style.display = 'none';
 });
 resetBtn.addEventListener('click', () => location.reload());
 
+// FIXED CONTROLS: Separating movement from weapon logic
 canvas.addEventListener('pointerdown', e => {
     joystick.active = true; joystick.x = e.clientX; joystick.y = e.clientY;
     joystick.currX = e.clientX; joystick.currY = e.clientY;
-    if(gameState === 'RACING' && !player.dead) {
-        if(player.nitro >= 30) player.boosting = true; // Use nitro on tap if enough
-        fireBullet();
-    }
 });
-canvas.addEventListener('pointermove', e => { if(joystick.active) { joystick.currX = e.clientX; joystick.currY = e.clientY; } });
-window.addEventListener('pointerup', () => { joystick.active = false; player.boosting = false; });
+canvas.addEventListener('pointermove', e => {
+    if(joystick.active) { joystick.currX = e.clientX; joystick.currY = e.clientY; }
+});
+window.addEventListener('pointerup', () => { joystick.active = false; });
 
-function fireBullet() {
-    bullets.push({ x: player.x + Math.cos(player.angle)*20, y: player.y + Math.sin(player.angle)*20, vx: Math.cos(player.angle)*12, vy: Math.sin(player.angle)*12, life: 40 });
+function autoFire() {
+    if(frame % player.fireRate !== 0) return;
+    let nearest = null, minDist = player.weaponRange;
+    aiCars.forEach(ai => {
+        if(ai.dead) return;
+        let d = Math.sqrt((player.x-ai.x)**2 + (player.y-ai.y)**2);
+        if(d < minDist) { minDist = d; nearest = ai; }
+    });
+    if(nearest) {
+        let angle = Math.atan2(nearest.y - player.y, nearest.x - player.x);
+        bullets.push({ x: player.x, y: player.y, vx: Math.cos(angle)*15, vy: Math.sin(angle)*15, life: 40 });
+    }
 }
 
 function applyPhysics(obj) {
     if(obj.dead) return;
-    if(obj.spin > 0) { obj.angle += 0.3; obj.spin--; }
-
-    // Nitro Logic
-    let currentPower = obj.power;
-    if(obj === player && obj.boosting && obj.nitro > 0) {
-        currentPower *= 2.5;
-        obj.nitro -= 1;
-    }
-
+    if(obj.spin > 0) { obj.angle += 0.4; obj.spin--; }
+    
     const sn = Math.sin(obj.angle), cs = Math.cos(obj.angle);
     let latX = -sn * (obj.velX * -sn + obj.velY * cs), latY = cs * (obj.velX * -sn + obj.velY * cs);
     
-    // Nitro gain on drift
-    if(obj === player && Math.sqrt(latX*latX + latY*latY) > 2) obj.nitro = Math.min(100, obj.nitro + 0.2);
+    if(obj === player && Math.sqrt(latX*latX + latY*latY) > 2) player.nitro = Math.min(100, player.nitro + 0.15);
 
     obj.velX -= latX * (1 - obj.grip); obj.velY -= latY * (1 - obj.grip);
-    obj.velX *= 0.97; obj.velY *= 0.97;
+    obj.velX *= 0.98; obj.velY *= 0.98;
 
     oilSlicks.forEach(s => {
-        if(Math.sqrt((obj.x-s.x)**2 + (obj.y-s.y)**2) < s.r) { obj.grip = 0.99; if(obj === player) player.spin = 10; }
-        else { obj.grip = (obj === player) ? 0.90 : 0.88; }
+        if(Math.sqrt((obj.x-s.x)**2 + (obj.y-s.y)**2) < s.r) { 
+            obj.grip = 0.99; if(obj === player && Math.abs(obj.velX) > 1) player.spin = 15; 
+        } else { obj.grip = (obj === player) ? 0.90 : 0.88; }
     });
 
     circuitWalls.forEach(w => {
-        if (obj.x + obj.velX + 12 > w.x && obj.x + obj.velX - 12 < w.x + w.w && obj.y + 12 > w.y && obj.y - 12 < w.y + w.h) { obj.velX *= -0.5; obj.hp -= 0.5; }
-        if (obj.x + 12 > w.x && obj.x - 12 < w.x + w.w && obj.y + obj.velY + 12 > w.y && obj.y + obj.velY - 12 < w.y + w.h) { obj.velY *= -0.5; obj.hp -= 0.5; }
+        if (obj.x + obj.velX + 15 > w.x && obj.x + obj.velX - 15 < w.x + w.w && obj.y + 15 > w.y && obj.y - 15 < w.y + w.h) obj.velX *= -0.4;
+        if (obj.x + 15 > w.x && obj.x - 15 < w.x + w.w && obj.y + obj.velY + 15 > w.y && obj.y + obj.velY - 15 < w.y + w.h) obj.velY *= -0.4;
     });
 
-    // Repair Pickup
     if(obj === player) {
         repairPacks.forEach(p => {
-            if(p.active && Math.sqrt((obj.x-p.x)**2 + (obj.y-p.y)**2) < 30) { p.active = false; player.hp = Math.min(100, player.hp + 40); }
+            if(p.active && Math.sqrt((obj.x-p.x)**2 + (obj.y-p.y)**2) < 40) { p.active = false; player.hp = Math.min(100, player.hp + 30); }
         });
     }
 
-    if(obj.hp <= 0) { obj.dead = true; obj.hp = 0; }
     obj.x += obj.velX; obj.y += obj.velY;
 }
 
 function update() {
+    frame++;
     if (gameState === 'RACING') {
         if (joystick.active && !player.dead) {
             const dx = joystick.currX - joystick.x, dy = joystick.currY - joystick.y;
             const dist = Math.sqrt(dx*dx + dy*dy);
             if (dist > 5) {
-                let diff = Math.atan2(dy, dx) - player.angle;
+                let targetA = Math.atan2(dy, dx);
+                let diff = targetA - player.angle;
                 while (diff < -Math.PI) diff += Math.PI * 2; while (diff > Math.PI) diff -= Math.PI * 2;
                 if(player.spin <= 0) player.angle += diff * player.turn;
-                let pwr = player.boosting ? player.power * 2.5 : player.power;
-                player.velX += Math.cos(player.angle) * Math.min(dist/50, 1) * pwr;
-                player.velY += Math.sin(player.angle) * Math.min(dist/50, 1) * pwr;
+                
+                let pwr = player.nitro > 5 ? player.power * 2 : player.power;
+                if(player.nitro > 5) player.nitro -= 0.5;
+                
+                player.velX += Math.cos(player.angle) * Math.min(dist/60, 1) * pwr;
+                player.velY += Math.sin(player.angle) * Math.min(dist/60, 1) * pwr;
             }
-        } else { player.boosting = false; }
+        }
+
+        autoFire();
 
         aiCars.forEach(ai => {
             if(ai.dead) return;
             let t = waypoints[ai.targetIdx];
-            if(Math.sqrt((t.x-ai.x)**2 + (t.y-ai.y)**2) < 120) ai.targetIdx = (ai.targetIdx + 1) % waypoints.length;
+            if(Math.sqrt((t.x-ai.x)**2 + (t.y-ai.y)**2) < 150) ai.targetIdx = (ai.targetIdx + 1) % waypoints.length;
             let ad = Math.atan2(t.y - ai.y, t.x - ai.x) - ai.angle;
             while (ad < -Math.PI) ad += Math.PI * 2; while (ad > Math.PI) ad -= Math.PI * 2;
             ai.angle += ad * ai.turn;
             ai.velX += Math.cos(ai.angle) * ai.power; ai.velY += Math.sin(ai.angle) * ai.power;
             applyPhysics(ai);
+            
             if(Math.sqrt((ai.x-player.x)**2 + (ai.y-player.y)**2) < ai.radius + player.radius) {
                 let a = Math.atan2(player.y-ai.y, player.x-ai.x);
-                player.velX += Math.cos(a)*3; player.velY += Math.sin(a)*3;
-                player.hp -= 1; ai.hp -= 1;
+                player.velX += Math.cos(a)*4; player.velY += Math.sin(a)*4;
+                player.hp -= 0.5;
             }
         });
 
         applyPhysics(player);
-        hpDisplay.innerText = Math.floor(player.hp);
+        hpFill.style.width = player.hp + "%";
         nitroFill.style.width = player.nitro + "%";
 
         bullets.forEach((b, i) => {
             b.x += b.vx; b.y += b.vy; b.life--;
             aiCars.forEach(ai => {
-                if(!ai.dead && Math.sqrt((b.x-ai.x)**2 + (b.y-ai.y)**2) < ai.radius){ ai.hp -= 15; ai.velX += b.vx*0.2; b.life=0; }
+                if(!ai.dead && Math.sqrt((b.x-ai.x)**2 + (b.y-ai.y)**2) < ai.radius){ ai.hp -= 10; ai.velX += b.vx*0.1; b.life=0; }
             });
             if(b.life <= 0) bullets.splice(i, 1);
         });
 
         if (player.x > 1000) canScoreLap = true;
-        if (canScoreLap && player.x < 400 && player.y < 350) { laps++; lapDisplay.innerText = laps; canScoreLap = false; }
-        if (laps >= lapGoal || player.dead) { gameState = 'FINISHED'; overlay.style.display = 'flex'; resetBtn.style.display = 'block'; countdownEl.innerText = player.dead ? "WRECKED" : "WINNER!"; }
+        if (canScoreLap && player.x < 450 && player.y < 400) { laps++; lapDisplay.innerText = laps; canScoreLap = false; }
+        if (laps >= lapGoal || player.hp <= 0) { 
+            gameState = 'FINISHED'; overlay.style.display = 'flex'; resetBtn.style.display = 'block'; 
+            msg.innerText = player.hp <= 0 ? "CAR DESTROYED" : "COURSE CLEAR";
+        }
     }
     draw();
     requestAnimationFrame(update);
@@ -201,28 +204,37 @@ function update() {
 function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.save();
     ctx.translate(canvas.width/2 - player.x, canvas.height/2 - player.y);
-    ctx.fillStyle = "#222"; ctx.fillRect(0, 0, 2000, 1100);
-    
-    oilSlicks.forEach(s => { ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.fill(); });
-    
-    repairPacks.forEach(p => { if(p.active){ ctx.fillStyle="#fff"; ctx.font="20px Arial"; ctx.fillText("🔧", p.x-10, p.y+10); }});
 
-    ctx.fillStyle = "#444"; circuitWalls.forEach(w => ctx.fillRect(w.x, w.y, w.w, w.h));
-    ctx.fillStyle = "#ff0"; bullets.forEach(b => ctx.fillRect(b.x-2, b.y-2, 4, 4));
+    // Track
+    ctx.fillStyle = "#111"; ctx.fillRect(0, 0, 2000, 1100);
+    ctx.strokeStyle = "#333"; ctx.lineWidth = 5; ctx.strokeRect(0, 0, 2000, 1100);
+    
+    oilSlicks.forEach(s => { ctx.fillStyle = "rgba(0,255,255,0.1)"; ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.fill(); });
+    repairPacks.forEach(p => { if(p.active){ ctx.fillStyle="#0f0"; ctx.shadowBlur=10; ctx.shadowColor="#0f0"; ctx.fillRect(p.x-10, p.y-10, 20, 20); ctx.shadowBlur=0; }});
+    ctx.fillStyle = "#222"; circuitWalls.forEach(w => ctx.fillRect(w.x, w.y, w.w, w.h));
+    
+    // Checkered line
+    ctx.fillStyle = "#444"; for(let i=0; i<10; i++) ctx.fillRect(400, 50 + (i*35), 20, 20);
+
+    ctx.fillStyle = "#fff"; bullets.forEach(b => ctx.fillRect(b.x-2, b.y-2, 4, 4));
 
     [player, ...aiCars].forEach(c => {
+        if(c.dead) return;
         ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.angle);
         ctx.fillStyle = c.color; ctx.fillRect(-c.w/2, -c.h/2, c.w, c.h);
-        if(c === player && c.boosting) { ctx.fillStyle = "#0cf"; ctx.fillRect(-c.w/2-5, -c.h/4, 5, c.h/2); }
-        ctx.restore();
-        if(!c.dead) {
-            ctx.fillStyle = "red"; ctx.fillRect(c.x-15, c.y-25, 30, 4);
-            ctx.fillStyle = "lime"; ctx.fillRect(c.x-15, c.y-25, (c.hp/(c.radius > 15 ? 200 : 100))*30, 4);
+        ctx.fillStyle = "rgba(255,255,255,0.3)"; ctx.fillRect(c.w/2-8, -c.h/2+2, 6, c.h-4); // Windshield
+        if(c === player && player.nitro > 5) { // Boost trails
+            ctx.fillStyle = "#0cf"; ctx.fillRect(-c.w/2-10, -c.h/2, 5, c.h);
         }
+        ctx.restore();
+        // Mini Health Bar
+        ctx.fillStyle = "#333"; ctx.fillRect(c.x-20, c.y-30, 40, 5);
+        ctx.fillStyle = c.color; ctx.fillRect(c.x-20, c.y-30, (c.hp/(c.radius > 16 ? 250 : 100))*40, 5);
     });
     ctx.restore();
-    if(joystick.active && gameState === 'RACING') {
-        ctx.beginPath(); ctx.arc(joystick.x, joystick.y, 40, 0, Math.PI*2); ctx.strokeStyle = "rgba(0,200,255,0.4)"; ctx.stroke();
+    if(joystick.active) {
+        ctx.beginPath(); ctx.arc(joystick.x, joystick.y, 50, 0, Math.PI*2); ctx.strokeStyle = "rgba(0,204,255,0.3)"; ctx.stroke();
+        ctx.beginPath(); ctx.arc(joystick.currX, joystick.currY, 25, 0, Math.PI*2); ctx.fillStyle = "rgba(0,204,255,0.1)"; ctx.fill();
     }
 }
 function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
